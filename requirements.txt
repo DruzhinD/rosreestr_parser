@@ -1,0 +1,4 @@
+selenium==4.27.1
+webdriver-manager==4.0.2
+ddddocr==1.6.1
+Pillow>=12.2.0
