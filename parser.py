@@ -34,10 +34,9 @@ import ddddocr
 from PIL import Image
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service
 
 TARGET_URL = "https://lk.rosreestr.ru/eservices/real-estate-objects-online"
 
@@ -150,7 +149,37 @@ def _append_output(row: dict) -> None:
 # Браузер
 # ---------------------------------------------------------------------------
 
-def _build_driver(headless: bool) -> webdriver.Chrome:
+def _find_edge_driver() -> str:
+    """
+    Ищет msedgedriver.exe: сначала рядом с parser.py, затем в PATH.
+    Если не найден — выводит инструкцию по скачиванию и завершает работу.
+    """
+    local = Path(__file__).parent / "msedgedriver.exe"
+    if local.exists():
+        return str(local)
+
+    in_path = shutil.which("msedgedriver") or shutil.which("msedgedriver.exe")
+    if in_path:
+        return in_path
+
+    edge_exe = Path("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe")
+    version_hint = ""
+    if edge_exe.exists():
+        app_dir = edge_exe.parent
+        versions = sorted(app_dir.glob("[0-9]*"), reverse=True)
+        if versions:
+            version_hint = f"  Версия Edge: {versions[0].name}"
+
+    raise RuntimeError(
+        "msedgedriver.exe не найден.\n"
+        "Скачайте по ссылке:\n"
+        "  https://developer.microsoft.com/ru-ru/microsoft-edge/tools/webdriver/\n"
+        f"{version_hint}\n"
+        "Распакуйте msedgedriver.exe и положите рядом с parser.py"
+    )
+
+
+def _build_driver(headless: bool) -> webdriver.Edge:
     opts = Options()
     if headless:
         opts.add_argument("--headless=new")
@@ -162,8 +191,8 @@ def _build_driver(headless: bool) -> webdriver.Chrome:
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
 
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=opts)
+    service = Service(executable_path=_find_edge_driver())
+    driver = webdriver.Edge(service=service, options=opts)
     driver.execute_cdp_cmd(
         "Page.addScriptToEvaluateOnNewDocument",
         {"source": "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"},
@@ -175,7 +204,7 @@ def _build_driver(headless: bool) -> webdriver.Chrome:
 # Элементы
 # ---------------------------------------------------------------------------
 
-def _find(driver: webdriver.Chrome, selectors: list[str]) -> Optional[webdriver.remote.webelement.WebElement]:
+def _find(driver: webdriver.Edge, selectors: list[str]) -> Optional[webdriver.remote.webelement.WebElement]:
     for sel in selectors:
         try:
             return driver.find_element(By.CSS_SELECTOR, sel)
@@ -184,7 +213,7 @@ def _find(driver: webdriver.Chrome, selectors: list[str]) -> Optional[webdriver.
     return None
 
 
-def _wait_for(driver: webdriver.Chrome, selectors: list[str], timeout: float = 15) -> Optional[webdriver.remote.webelement.WebElement]:
+def _wait_for(driver: webdriver.Edge, selectors: list[str], timeout: float = 15) -> Optional[webdriver.remote.webelement.WebElement]:
     deadline = time.time() + timeout
     while time.time() < deadline:
         el = _find(driver, selectors)
@@ -194,7 +223,7 @@ def _wait_for(driver: webdriver.Chrome, selectors: list[str], timeout: float = 1
     return None
 
 
-def _react_fill(driver: webdriver.Chrome, element: webdriver.remote.webelement.WebElement, value: str) -> None:
+def _react_fill(driver: webdriver.Edge, element: webdriver.remote.webelement.WebElement, value: str) -> None:
     element.click()
     element.clear()
     driver.execute_script(_JS_SET_VALUE, element, value)
@@ -205,7 +234,7 @@ def _react_fill(driver: webdriver.Chrome, element: webdriver.remote.webelement.W
 # Капча
 # ---------------------------------------------------------------------------
 
-def _get_captcha_image(driver: webdriver.Chrome) -> Image.Image:
+def _get_captcha_image(driver: webdriver.Edge) -> Image.Image:
     img_el = _find(driver, _CAPTCHA_IMG_FALLBACK)
     if img_el is None:
         raise RuntimeError("Изображение капчи не найдено")
@@ -236,12 +265,12 @@ def _solve_captcha(img: Image.Image) -> str:
 # Состояние страницы
 # ---------------------------------------------------------------------------
 
-def _captcha_error(driver: webdriver.Chrome) -> bool:
+def _captcha_error(driver: webdriver.Edge) -> bool:
     text = driver.find_element(By.TAG_NAME, "body").text.lower()
     return any(k in text for k in ("неверн", "captcha", "повторите", "ошибка ввода"))
 
 
-def _reload_captcha(driver: webdriver.Chrome, timeout: float = 8) -> None:
+def _reload_captcha(driver: webdriver.Edge, timeout: float = 8) -> None:
     """
     Обновляет капчу и ждёт, пока src изображения реально сменится.
     Если кнопки reload нет — перезагружает страницу целиком.
@@ -284,7 +313,7 @@ def _reload_captcha(driver: webdriver.Chrome, timeout: float = 8) -> None:
     time.sleep(3)
 
 
-def _object_not_found(driver: webdriver.Chrome) -> bool:
+def _object_not_found(driver: webdriver.Edge) -> bool:
     text = driver.find_element(By.TAG_NAME, "body").text.lower()
     return any(k in text for k in ("не найден", "не обнаружен", "отсутствует", "not found"))
 
@@ -293,7 +322,7 @@ def _object_not_found(driver: webdriver.Chrome) -> bool:
 # Результат
 # ---------------------------------------------------------------------------
 
-def _extract_object_type(driver: webdriver.Chrome) -> Optional[str]:
+def _extract_object_type(driver: webdriver.Edge) -> Optional[str]:
     def _valid(val: str) -> bool:
         return bool(val) and val.lower() != _FORM_PLACEHOLDER
 
@@ -336,7 +365,7 @@ def _extract_object_type(driver: webdriver.Chrome) -> Optional[str]:
 # Отладка
 # ---------------------------------------------------------------------------
 
-def _save_debug(driver: webdriver.Chrome, tag: str) -> None:
+def _save_debug(driver: webdriver.Edge, tag: str) -> None:
     driver.save_screenshot(f"debug_{tag}.png")
     Path(f"debug_{tag}.html").write_text(driver.page_source, encoding="utf-8")
     print(f"[debug] debug_{tag}.png  debug_{tag}.html")
@@ -347,7 +376,7 @@ def _save_debug(driver: webdriver.Chrome, tag: str) -> None:
 # ---------------------------------------------------------------------------
 
 def _parse_with_driver(
-    driver: webdriver.Chrome,
+    driver: webdriver.Edge,
     cadastral_number: str,
     max_retries: int = 7,
     debug: bool = False,
