@@ -614,14 +614,18 @@ def main() -> None:
     print(f"Режим: {'headless' if args.headless else 'с браузером'}, попыток: {args.retries}")
     print("=" * 60)
 
-    run_batch(headless=args.headless, max_retries=args.retries, debug=args.debug)
-    dt_prefix = datetime.now().strftime("%Y-%m-%d_%H %M %S")
-    
-    output_dir = Path("output")
-    output_dir.mkdir(exist_ok=True)
-    archive_name = f"{OUTPUT_CSV.stem}.{dt_prefix}{OUTPUT_CSV.suffix}"
-    copy_path = output_dir / archive_name
-    shutil.copy(OUTPUT_CSV, copy_path)
+    try:
+        run_batch(headless=args.headless, max_retries=args.retries, debug=args.debug)
+    except KeyboardInterrupt as ex:
+        print("\nПрервано пользователем.")
+    finally:
+        dt_prefix = datetime.now().strftime("%Y-%m-%d_%H %M %S")
+        
+        output_dir = Path("output")
+        output_dir.mkdir(exist_ok=True)
+        archive_name = f"{OUTPUT_CSV.stem}.{dt_prefix}{OUTPUT_CSV.suffix}"
+        copy_path = output_dir / archive_name
+        shutil.copy(OUTPUT_CSV, copy_path)
 
 
 
