@@ -11,6 +11,8 @@
     python parser.py --retries 10 --debug
 """
 
+import shutil
+import os
 import argparse
 import base64
 import csv
@@ -20,6 +22,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+from datetime import datetime
 
 # UTF-8 вывод на Windows-консоли
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
@@ -69,8 +72,12 @@ _OBJECT_TYPE_XPATHS_FALLBACK = [
     "//td[contains(., 'Вид объекта')]/following-sibling::td[1]",
     "//th[contains(., 'Вид объекта')]/following-sibling::td[1]",
     "//dt[contains(., 'Вид объекта')]/following-sibling::dd[1]",
-    "//*[contains(text(),'Вид объекта')]/following-sibling::*[1]",
+    # Широкий //*[contains(text(),...)] убран: он ловил dropdown-фильтр формы
+    # «Вид объекта» с placeholder «Выберите значение из справочника»
 ]
+
+# Placeholder незаполненного dropdown-фильтра формы — не является результатом
+_FORM_PLACEHOLDER = "выберите значение из справочника"
 
 _JS_SET_VALUE = """
 var el = arguments[0], val = arguments[1];
@@ -287,7 +294,11 @@ def _object_not_found(driver: webdriver.Chrome) -> bool:
 # ---------------------------------------------------------------------------
 
 def _extract_object_type(driver: webdriver.Chrome) -> Optional[str]:
-    # По data-test-id заголовка колонки (React-таблица Росреестра)
+    def _valid(val: str) -> bool:
+        return bool(val) and val.lower() != _FORM_PLACEHOLDER
+
+    # React-таблица: ищем колонку «Вид объекта» по data-test-id заголовка,
+    # затем берём текст ячейки напрямую (без требования <a>-тега)
     try:
         head_cells = driver.find_elements(
             By.XPATH, "//div[starts-with(@data-test-id,'head-cell-')]"
@@ -300,20 +311,20 @@ def _extract_object_type(driver: webdriver.Chrome) -> Optional[str]:
                 break
         if col_idx is not None:
             cell = driver.find_element(
-                By.XPATH, f"//div[@data-test-id='cell-{col_idx}']//a[normalize-space()]"
+                By.XPATH, f"//div[@data-test-id='cell-{col_idx}']"
             )
             val = cell.text.strip()
-            if val:
+            if _valid(val):
                 return val
     except Exception:
         pass
 
-    # Fallback для классических таблиц
+    # Fallback для классических HTML-таблиц
     for xpath in _OBJECT_TYPE_XPATHS_FALLBACK:
         try:
             el = driver.find_element(By.XPATH, xpath)
             val = el.text.strip()
-            if val:
+            if _valid(val):
                 return val
         except NoSuchElementException:
             pass
@@ -534,6 +545,14 @@ def main() -> None:
     print("=" * 60)
 
     run_batch(headless=args.headless, max_retries=args.retries, debug=args.debug)
+    dt_prefix = datetime.now().strftime("%Y-%m-%d_%H %M %S")
+    
+    output_dir = Path("output")
+    output_dir.mkdir(exist_ok=True)
+    archive_name = f"{OUTPUT_CSV.stem}.{dt_prefix}{OUTPUT_CSV.suffix}"
+    copy_path = output_dir / archive_name
+    shutil.copy(OUTPUT_CSV, copy_path)
+
 
 
 if __name__ == "__main__":
