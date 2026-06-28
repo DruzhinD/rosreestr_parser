@@ -2,7 +2,7 @@
 Парсер Росреестра — пакетная обработка кадастровых номеров из input.csv.
 
 Читает: input.csv  (колонка kadastral_number или первая колонка)
-Пишет:  output.csv (kadastral_number, object_type, is_active)
+Пишет:  output.csv (kadastral_number, object_type, target, is_active)
 Лог:    log.logs
 
 Запуск:
@@ -44,7 +44,7 @@ INPUT_CSV  = Path("input.csv")
 OUTPUT_CSV = Path("output.csv")
 LOG_FILE   = Path("log.logs")
 
-OUTPUT_FIELDNAMES = ["kadastral_number", "object_type", "is_active"]
+OUTPUT_FIELDNAMES = ["kadastral_number", "object_type", "target", "is_active"]
 
 _SUBMIT_ID = "realestateobjects-search"
 
@@ -318,6 +318,39 @@ def _object_not_found(driver: webdriver.Edge) -> bool:
     return any(k in text for k in ("не найден", "не обнаружен", "отсутствует", "not found"))
 
 
+def _click_first_result(driver: webdriver.Edge) -> bool:
+    """Кликает первую ссылку в таблице результатов. Возвращает True при успехе."""
+    for sel in [
+        "div[data-test-id^='cell-'] a",
+        "table tbody tr:first-child a",
+    ]:
+        try:
+            driver.find_element(By.CSS_SELECTOR, sel).click()
+            return True
+        except NoSuchElementException:
+            pass
+    return False
+
+
+def _extract_detail_field(driver: webdriver.Edge, label: str) -> Optional[str]:
+    """Извлекает значение поля по тексту метки на карточке объекта."""
+    xpaths = [
+        f"//*[normalize-space(.)='{label}']/following-sibling::*[normalize-space()][1]",
+        f"//*[normalize-space(text())='{label}']/following-sibling::*[1]",
+        f"//td[normalize-space(.)='{label}']/following-sibling::td[1]",
+        f"//dt[normalize-space(.)='{label}']/following-sibling::dd[1]",
+    ]
+    for xpath in xpaths:
+        try:
+            el = driver.find_element(By.XPATH, xpath)
+            val = el.text.strip()
+            if val and val.lower() != _FORM_PLACEHOLDER:
+                return val
+        except NoSuchElementException:
+            pass
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Результат
 # ---------------------------------------------------------------------------
@@ -475,9 +508,14 @@ def _parse_with_driver(
 
         result = _extract_object_type(driver)
         if result:
+            # Переходим в карточку объекта для извлечения «Назначения»
+            target = ""
+            if _click_first_result(driver):
+                time.sleep(2)
+                target = _extract_detail_field(driver, "Назначение") or ""
             if debug:
                 _save_debug(driver, f"{cadastral_number.replace(':', '_')}_success")
-            return result
+            return {"object_type": result, "target": target}
 
         if debug:
             _save_debug(driver, f"{cadastral_number.replace(':', '_')}_no_result_{attempt}")
@@ -500,8 +538,9 @@ def parse(
     headless: bool = False,
     max_retries: int = 7,
     debug: bool = False,
-) -> Optional[str]:
-    """Парсит один КН, открывая и закрывая браузер."""
+) -> Optional[dict]:
+    """Парсит один КН, открывая и закрывая браузер.
+    Возвращает {"object_type": str, "target": str} или None если не найден."""
     driver = _build_driver(headless)
     try:
         return _parse_with_driver(driver, cadastral_number, max_retries, debug)
@@ -529,20 +568,22 @@ def run_batch(
         for idx, kn in enumerate(numbers, 1):
             print(f"\n[{idx}/{total}] {kn}")
             try:
-                obj_type = _parse_with_driver(driver, kn, max_retries, debug)
-                if obj_type:
-                    row = {"kadastral_number": kn, "object_type": obj_type, "is_active": 1}
+                res = _parse_with_driver(driver, kn, max_retries, debug)
+                if res:
+                    obj_type = res["object_type"]
+                    target   = res.get("target", "")
+                    row = {"kadastral_number": kn, "object_type": obj_type, "target": target, "is_active": 1}
                     _append_output(row)
-                    logger.info(f"СОХРАНЕНО | {kn} | object_type={obj_type!r} | is_active=1")
+                    logger.info(f"СОХРАНЕНО | {kn} | object_type={obj_type!r} | target={target!r} | is_active=1")
                 else:
-                    row = {"kadastral_number": kn, "object_type": "", "is_active": 0}
+                    row = {"kadastral_number": kn, "object_type": "", "target": "", "is_active": 0}
                     _append_output(row)
-                    logger.info(f"СОХРАНЕНО | {kn} | object_type='' | is_active=0 (объект не найден)")
+                    logger.info(f"СОХРАНЕНО | {kn} | object_type='' | target='' | is_active=0 (объект не найден)")
 
             except RuntimeError as exc:
-                row = {"kadastral_number": kn, "object_type": "", "is_active": 0}
+                row = {"kadastral_number": kn, "object_type": "", "target": "", "is_active": -1}
                 _append_output(row)
-                logger.error(f"ОШИБКА    | {kn} | {exc} | сохранено is_active=0")
+                logger.error(f"ОШИБКА    | {kn} | {exc} | сохранено is_active=-1")
 
     finally:
         driver.quit()
